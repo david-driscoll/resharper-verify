@@ -6,6 +6,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## 2026.1.0
 - Added support for ReSharper and Rider 2026.1
+- Fixed detection of Verify failures for frameworks running on Microsoft.Testing.Platform without a dedicated Rider adapter (e.g. TUnit), where the exception type is unavailable and the message may carry a category label prefix
 
 ## 2025.3.0
 - Added support for ReSharper and Rider 2025.3

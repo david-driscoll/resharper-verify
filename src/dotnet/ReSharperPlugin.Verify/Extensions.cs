@@ -140,15 +140,22 @@ public static class Extensions
             return false;
 
         var info = result.GetExceptionInfo(0);
-        return info.Type == "VerifyException" ||
-               (info.Message?.StartsWith("VerifyException") ?? false) ||
-               // MSTest
-               (info.Message?.Substring(info.Message.IndexOf('\n') + 1, 15) == "VerifyException");
+
+        // Most adapters (xUnit, NUnit, MSTest) surface the real exception type.
+        if (info.Type == "VerifyException")
+            return true;
+
+        // Frameworks running on Microsoft.Testing.Platform without a dedicated Rider
+        // adapter (e.g. TUnit) come through the generic MTP provider, which reports the
+        // failure with a null exception type and only the message text. Fall back to
+        // recognising the VerifyException payload from the message itself.
+        return TryGetVerifyMessage(info.Message) != null;
     }
 
     private static Result GetParseResult(this UnitTestResultData result)
     {
-        var message = result.GetExceptionInfo(0).Message!;
+        var rawMessage = result.GetExceptionInfo(0).Message!;
+        var message = TryGetVerifyMessage(rawMessage) ?? rawMessage;
         try
         {
             return Parser.Parse(message);
@@ -160,5 +167,66 @@ public static class Extensions
                 "\n\nNote that you might need to rerun tests before your changes take effect.");
             return default;
         }
+    }
+
+    private static readonly string[] sectionMarkers = { "New:", "NotEqual:", "Equal:", "Delete:" };
+
+    /// <summary>
+    /// Normalises a test failure message down to the raw <c>VerifyException</c> payload that
+    /// <see cref="Parser" /> understands, or returns <c>null</c> when the message is not a
+    /// Verify failure.
+    /// </summary>
+    /// <remarks>
+    /// This handles the cases where the exception type is unavailable, which happens for test
+    /// frameworks that run on Microsoft.Testing.Platform without a dedicated Rider adapter.
+    /// TUnit is the notable example: Rider receives the failure through the generic MTP provider,
+    /// which loses the exception type (it is reported as <c>null</c>) and may prefix the message
+    /// with a category label such as <c>"[Test Failure] "</c>. The remaining text is the raw
+    /// <c>VerifyException.Message</c>, which always begins with <c>"Directory:"</c> followed by one
+    /// of the section headers.
+    /// </remarks>
+    private static string TryGetVerifyMessage(string message)
+    {
+        if (string.IsNullOrEmpty(message))
+            return null;
+
+        var candidate = message.TrimStart();
+
+        // Strip a leading "[label] " prefix added by TUnit on Microsoft.Testing.Platform.
+        if (candidate.StartsWith("["))
+        {
+            var closing = candidate.IndexOf(']');
+            if (closing > 0)
+            {
+                candidate = candidate.Substring(closing + 1).TrimStart();
+            }
+        }
+
+        if (LooksLikeVerifyPayload(candidate))
+            return candidate;
+
+        // MSTest prepends "Test method ..." on the first line, with "VerifyException" and the
+        // payload starting on a later line.
+        var index = message.IndexOf("VerifyException", StringComparison.Ordinal);
+        return index >= 0 ? message.Substring(index) : null;
+    }
+
+    private static bool LooksLikeVerifyPayload(string candidate)
+    {
+        if (candidate.StartsWith("VerifyException"))
+            return true;
+
+        if (!candidate.StartsWith("Directory:"))
+            return false;
+
+        // Guard against unrelated failures that merely start with "Directory:" by requiring at
+        // least one of the section headers a VerifyException always contains.
+        foreach (var marker in sectionMarkers)
+        {
+            if (candidate.Contains(marker))
+                return true;
+        }
+
+        return false;
     }
 }
